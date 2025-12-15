@@ -1,7 +1,8 @@
+import type { ChildProcess } from "node:child_process";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { inspect } from "node:util";
-import type { WebSocket } from "ws";
-import { WebSocketServer } from "ws";
+import { WebSocket, WebSocketServer } from "ws";
 
 let isQuiet = false;
 
@@ -25,16 +26,99 @@ function prettyPrintMessage(
   }
 }
 
-function handleWebSocketConnection(command: string[], webSocket: WebSocket): void {
+// Persistence support for reconnections
+interface Client {
+  id: string;
+  child: ChildProcess;
+  ws: WebSocket;
+  buffer: string[];
+  cleanupTimer?: NodeJS.Timeout;
+}
+
+const clients = new Map<string, Client>();
+
+function cleanupClient(clientId: string): void {
+  const client = clients.get(clientId);
+  if (!client) return;
+
+  log(`Cleaning up client ${clientId}`);
+  if (client.cleanupTimer) {
+    clearTimeout(client.cleanupTimer);
+  }
+  client.child.kill();
+  clients.delete(clientId);
+}
+
+function handleWebSocketConnection(
+  command: string[],
+  webSocket: WebSocket,
+  options: { persist: boolean; gracePeriodMs: number; clientId?: string },
+): void {
+  const { persist, gracePeriodMs, clientId: requestedId } = options;
+
+  // Check if reconnecting to existing client
+  if (persist && requestedId && clients.has(requestedId)) {
+    const client = clients.get(requestedId)!;
+    log(`Reconnecting to existing client ${client.id}`);
+
+    // Cancel cleanup timer
+    if (client.cleanupTimer) {
+      clearTimeout(client.cleanupTimer);
+      client.cleanupTimer = undefined;
+    }
+
+    // Update WebSocket reference
+    client.ws = webSocket;
+
+    // Send reconnect confirmation and flush buffered messages
+    webSocket.send(JSON.stringify({ type: "reconnect", clientId: client.id }));
+    for (const msg of client.buffer) {
+      webSocket.send(msg);
+    }
+    client.buffer = [];
+
+    // Setup WebSocket listeners
+    webSocket.on("message", (data) => {
+      try {
+        const message = data.toString();
+        const content = message.replace(/^Content-Length: \d+\r?\n\r?\n/, "");
+        prettyPrintMessage("[Client → Server]", content);
+        client.child.stdin?.write(content);
+      } catch (error) {
+        logError("Failed to write to child stdin:", error);
+      }
+    });
+
+    webSocket.on("close", () => {
+      log(`WebSocket closed for client ${client.id}, starting grace period`);
+      client.cleanupTimer = setTimeout(() => {
+        cleanupClient(client.id);
+      }, gracePeriodMs);
+    });
+
+    return;
+  }
+
+  // Create new connection
   const child = spawn(command[0]!, command.slice(1));
+  const clientId = randomUUID();
+
+  const client: Client = { id: clientId, child, ws: webSocket, buffer: [] };
+  if (persist) {
+    clients.set(clientId, client);
+    log(`Created new client ${clientId}`);
+    webSocket.send(JSON.stringify({ type: "connected", clientId }));
+  }
 
   child.on("error", (error) => {
     logError("Child process error:", error);
+    if (persist) cleanupClient(clientId);
     webSocket.close();
   });
 
   child.on("exit", (code) => {
     log(`Child process exited with code ${code}`);
+    if (persist) cleanupClient(clientId);
     webSocket.close();
   });
 
@@ -43,14 +127,21 @@ function handleWebSocketConnection(command: string[], webSocket: WebSocket): voi
       const message = data.toString();
       const content = message.replace(/^Content-Length: \d+\r?\n\r?\n/, "");
       prettyPrintMessage("[Client → Server]", content);
-      child.stdin.write(content);
+      child.stdin?.write(content);
     } catch (error) {
       logError("Failed to write to child stdin:", error);
     }
   });
 
   webSocket.on("close", () => {
-    child.kill();
+    if (persist) {
+      log(`WebSocket closed for client ${clientId}, starting grace period`);
+      client.cleanupTimer = setTimeout(() => {
+        cleanupClient(clientId);
+      }, gracePeriodMs);
+    } else {
+      child.kill();
+    }
   });
 
   child.stdout.on("data", (data) => {
@@ -58,7 +149,11 @@ function handleWebSocketConnection(command: string[], webSocket: WebSocket): voi
       const message = data.toString();
       const content = message.replace(/^Content-Length: \d+\r?\n\r?\n/, "");
       prettyPrintMessage("[Server → Client]", content);
-      webSocket.send(content);
+      if (client.ws.readyState === WebSocket.OPEN) {
+        client.ws.send(content);
+      } else if (persist) {
+        client.buffer.push(content);
+      }
     } catch (error) {
       logError("Failed to send data to WebSocket:", error);
     }
@@ -74,19 +169,21 @@ export function startWebSocketServer(opts: {
   command: string[];
   corsOrigin?: string | string[] | boolean;
   quiet?: boolean;
+  persist?: boolean;
+  gracePeriodMs?: number;
 }): void {
-  const { port, command, corsOrigin, quiet = false } = opts;
+  const { port, command, corsOrigin, quiet = false, persist = false, gracePeriodMs = 30000 } = opts;
   isQuiet = quiet;
 
   const wss = new WebSocketServer({
     port,
     verifyClient: corsOrigin
       ? ({ origin }: { origin: string }) => {
-          if (corsOrigin === true) return true;
-          if (typeof corsOrigin === "string") return origin === corsOrigin;
-          if (Array.isArray(corsOrigin)) return corsOrigin.includes(origin);
-          return false;
-        }
+        if (corsOrigin === true) return true;
+        if (typeof corsOrigin === "string") return origin === corsOrigin;
+        if (Array.isArray(corsOrigin)) return corsOrigin.includes(origin);
+        return false;
+      }
       : undefined,
   });
 
@@ -94,10 +191,11 @@ export function startWebSocketServer(opts: {
     logError("WebSocket server error:", error);
   });
 
-  wss.on("connection", (webSocket) => {
+  wss.on("connection", (webSocket, request) => {
     log("New WebSocket connection");
-    handleWebSocketConnection(command, webSocket);
+    const clientId = request.headers["x-client-id"] as string | undefined;
+    handleWebSocketConnection(command, webSocket, { persist, gracePeriodMs, clientId });
   });
 
-  log(`WebSocket server listening on port ${port}`);
+  log(`WebSocket server listening on port ${port}${persist ? ` (persistence enabled, grace period: ${gracePeriodMs}ms)` : ''}`);
 }
