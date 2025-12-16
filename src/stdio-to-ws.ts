@@ -56,6 +56,9 @@ function handleWebSocketConnection(
 ): void {
   const { persist, gracePeriodMs, clientId: requestedId } = options;
 
+  // -1 means infinite grace period (no cleanup)
+  const isInfinite = gracePeriodMs === -1;
+
   // Check if reconnecting to existing client
   if (persist && requestedId && clients.has(requestedId)) {
     const client = clients.get(requestedId)!;
@@ -90,10 +93,12 @@ function handleWebSocketConnection(
     });
 
     webSocket.on("close", () => {
-      log(`WebSocket closed for client ${client.id}, starting grace period`);
-      client.cleanupTimer = setTimeout(() => {
-        cleanupClient(client.id);
-      }, gracePeriodMs);
+      log(`WebSocket closed for client ${client.id}${isInfinite ? " (infinite persistence)" : ", starting grace period"}`);
+      if (!isInfinite) {
+        client.cleanupTimer = setTimeout(() => {
+          cleanupClient(client.id);
+        }, gracePeriodMs);
+      }
     });
 
     return;
@@ -101,7 +106,7 @@ function handleWebSocketConnection(
 
   // Create new connection
   const child = spawn(command[0]!, command.slice(1));
-  const clientId = randomUUID();
+  const clientId = requestedId || randomUUID();
 
   const client: Client = { id: clientId, child, ws: webSocket, buffer: [] };
   if (persist) {
@@ -135,10 +140,13 @@ function handleWebSocketConnection(
 
   webSocket.on("close", () => {
     if (persist) {
-      log(`WebSocket closed for client ${clientId}, starting grace period`);
-      client.cleanupTimer = setTimeout(() => {
-        cleanupClient(clientId);
-      }, gracePeriodMs);
+      const isInfinite = gracePeriodMs === -1;
+      log(`WebSocket closed for client ${clientId}${isInfinite ? " (infinite persistence)" : ", starting grace period"}`);
+      if (!isInfinite) {
+        client.cleanupTimer = setTimeout(() => {
+          cleanupClient(clientId);
+        }, gracePeriodMs);
+      }
     } else {
       child.kill();
     }
@@ -192,10 +200,11 @@ export function startWebSocketServer(opts: {
   });
 
   wss.on("connection", (webSocket, request) => {
-    log("New WebSocket connection");
     const clientId = request.headers["x-client-id"] as string | undefined;
+    log("New WebSocket connection", clientId ? `(X-Client-Id: ${clientId})` : "(no X-Client-Id header)");
     handleWebSocketConnection(command, webSocket, { persist, gracePeriodMs, clientId });
   });
 
-  log(`WebSocket server listening on port ${port}${persist ? ` (persistence enabled, grace period: ${gracePeriodMs}ms)` : ''}`);
+  const graceDisplay = gracePeriodMs === -1 ? "infinite" : `${gracePeriodMs}ms`;
+  log(`WebSocket server listening on port ${port}${persist ? ` (persistence enabled, grace period: ${graceDisplay})` : ''}`);
 }
