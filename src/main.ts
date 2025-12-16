@@ -5,8 +5,8 @@ import { startWebSocketServer } from "./stdio-to-ws.js";
 
 const argv = minimist(process.argv.slice(2), {
   alias: { p: "port", h: "help", q: "quiet", g: "grace-period" },
-  default: { port: 3000, "grace-period": 30000 },
-  boolean: ["quiet", "persist"],
+  default: { port: 3000, "grace-period": "30000" },
+  boolean: ["quiet", "persist", "1"],  // Treat -1 as a boolean so we can detect it
   string: ["grace-period"],
 });
 
@@ -38,8 +38,9 @@ if (!cmd) {
 }
 
 // Parse grace period, handling -1 as infinite
+// minimist parses `--grace-period -1` as grace-period=true and -1 flag set
 let gracePeriodMs: number;
-if (argv["grace-period"] === "-1") {
+if (argv["1"] === true || argv["grace-period"] === "-1") {
   gracePeriodMs = -1;
 } else {
   gracePeriodMs = parseInt(argv["grace-period"], 10);
