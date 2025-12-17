@@ -5,7 +5,7 @@ import { startWebSocketServer } from "./stdio-to-ws.js";
 
 const argv = minimist(process.argv.slice(2), {
   alias: { p: "port", h: "help", q: "quiet", g: "grace-period" },
-  default: { port: 3000, "grace-period": "30000" },
+  default: { port: 3000, "grace-period": "30" },
   boolean: ["quiet", "persist", "1"],  // Treat -1 as a boolean so we can detect it
   string: ["grace-period"],
 });
@@ -15,15 +15,15 @@ if (argv.help) {
 Usage: stdio-to-ws [options] <command>
 
 Options:
-  -p, --port <port>           Port to listen on (default: 3000)
-  --persist                   Enable process persistence for reconnections
-  -g, --grace-period <ms>     Grace period before killing child process on disconnect (default: 30000, -1 for infinite, requires --persist)
-  -q, --quiet                 Suppress logging output
-  -h, --help                  Show this help message
+  -p, --port <port>              Port to listen on (default: 3000)
+  --persist                      Enable process persistence for reconnections
+  -g, --grace-period <seconds>   Grace period in seconds before killing child process on disconnect (default: 30, -1 for infinite, requires --persist)
+  -q, --quiet                    Suppress logging output
+  -h, --help                     Show this help message
 
 Example:
   stdio-to-ws -p 8080 "python my-script.py"
-  stdio-to-ws --persist --grace-period 60000 "python my-script.py"
+  stdio-to-ws --persist --grace-period 60 "python my-script.py"
   stdio-to-ws --persist --grace-period -1 "python my-script.py"  # infinite persistence
   stdio-to-ws --quiet "python my-script.py"
   `);
@@ -37,17 +37,18 @@ if (!cmd) {
   process.exit(1);
 }
 
-// Parse grace period, handling -1 as infinite
+// Parse grace period in seconds, handling -1 as infinite
 // minimist parses `--grace-period -1` as grace-period=true and -1 flag set
 let gracePeriodMs: number;
 if (argv["1"] === true || argv["grace-period"] === "-1") {
   gracePeriodMs = -1;
 } else {
-  gracePeriodMs = parseInt(argv["grace-period"], 10);
-  if (isNaN(gracePeriodMs)) {
-    console.error("Grace period must be a number or -1 for infinite.");
+  const gracePeriodSeconds = parseInt(argv["grace-period"], 10);
+  if (isNaN(gracePeriodSeconds)) {
+    console.error("Grace period must be a number (in seconds) or -1 for infinite.");
     process.exit(1);
   }
+  gracePeriodMs = gracePeriodSeconds * 1000;
 }
 
 void startWebSocketServer({

@@ -17,11 +17,11 @@ npx stdio-to-ws "npx @google/gemini-cli --experimental-acp" --port 3000
 ### Options
 
 ```
--p, --port <port>         Port to listen on (default: 3000)
---persist                 Keep child process alive during disconnections
--g, --grace-period <ms>   Time before killing disconnected process (default: 30000)
--q, --quiet               Suppress logging output
--h, --help                Show help message
+-p, --port <port>              Port to listen on (default: 3000)
+--persist                      Keep child process alive during disconnections
+-g, --grace-period <seconds>   Time in seconds before killing disconnected process (default: 30, -1 for infinite)
+-q, --quiet                    Suppress logging output
+-h, --help                     Show help message
 ```
 
 ### Persistence Mode

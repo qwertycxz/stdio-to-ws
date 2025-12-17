@@ -205,6 +205,6 @@ export function startWebSocketServer(opts: {
     handleWebSocketConnection(command, webSocket, { persist, gracePeriodMs, clientId });
   });
 
-  const graceDisplay = gracePeriodMs === -1 ? "infinite" : `${gracePeriodMs}ms`;
+  const graceDisplay = gracePeriodMs === -1 ? "infinite" : `${gracePeriodMs / 1000}s`;
   log(`WebSocket server listening on port ${port}${persist ? ` (persistence enabled, grace period: ${graceDisplay})` : ''}`);
 }
