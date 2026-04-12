@@ -223,7 +223,7 @@ export async function startTunnelHost(opts: {
     if (!existingPort) {
       const tunnelPort: TunnelPort = {
         portNumber: port,
-        protocol: "https",
+        protocol: "auto",
         accessControl: {
           entries: [
             {
