@@ -59,7 +59,7 @@ function handleWebSocketConnection(
   // -1 means infinite grace period (no cleanup)
   const isInfinite = gracePeriodMs === -1;
 
-  let pingTimer: NodeJS.Timeout | null;
+  let pingTimer: NodeJS.Timeout | null = null;
   if (pingIntervalMs) {
     pingTimer = setInterval(() => webSocket.ping(), pingIntervalMs);
   }
